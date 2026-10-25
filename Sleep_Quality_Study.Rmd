@@ -1,0 +1,994 @@
+---
+title: "Sleep_Quality_Study"
+output: html_document
+---
+
+```{r}
+library(dplyr)
+library(ggplot2)
+#To clean, use the tidyverse package, requires Rtools for resolving dependencies
+library(tidyverse)
+
+#Necessary libraries for decision tree modeling
+library(rpart)
+library(rpart.plot)
+library(caret)
+
+#Necessary libraries for non-par stats
+
+
+#Necessary libraries for linear regression
+library(ggcorrplot)
+library(car)
+library(knitr)
+library(kableExtra)
+
+```
+
+```{r}
+#Load data
+data <- read.csv("/Users/danielaramirez/Desktop/DataVisualization/Sleep_health_and_lifestyle_dataset.csv")
+colnames(data)
+
+#glimpse(data)
+#summary(data)
+```
+
+##Data cleaning and adjusting
+```{r}
+##Group Blood pressure Edit
+#Change blood pressure
+Systolic <- list()
+for (value in data$Blood.Pressure) {
+  systolic_pressure <- strsplit(value, "/")[[1]][1] #Create new element
+  Systolic[[length(Systolic) + 1]] <- systolic_pressure
+}
+
+#Two parts of the blood pressure, diastole is the lower
+Diastolic <- list()
+for (value in data$Blood.Pressure) {
+  diastolic_pressure <- strsplit(value, "/")[[1]][2] #Create new element
+  Diastolic[[length(Diastolic) + 1]] <- diastolic_pressure
+}
+Systolic <- as.integer(Systolic)
+Diastolic <- as.integer(Diastolic)
+
+data$Systolic <- Systolic
+data$Diastolic <- Diastolic
+
+#Group blood pressure
+#Reference from: https://www.mayoclinic.org/diseases-conditions/high-blood-pressure/in-depth/blood-pressure/art-20050982
+data$BP <- ifelse(data$Diastolic<80 & data$Systolic<120, "Normal", 
+                  ifelse(data$Diastolic<80 & (120 <= data$Systolic | data$Systolic <= 129), "Elevated",
+                         ifelse((80 <= data$Diastolic | data$Diastolic <= 89) & (130 <= data$Systolic | data$Systolic <= 139), "High", "Low")))
+
+#Group Sleep quality 
+data$Sleep.Quality.Group <- ifelse(1<=data$Quality.of.Sleep & data$Quality.of.Sleep<=4, "Low Quality",
+                             ifelse(5<=data$Quality.of.Sleep & data$Quality.of.Sleep<=7, "Medium Quality", "High Quality"))
+
+```
+
+
+##Creation of Descriptive Statistics Tables
+```{r}
+#Function for continuous data
+continuous_summary <- function(data, vars) {
+  do.call(rbind, lapply(vars, function(v) {
+    x <- data[[v]]
+    data.frame(
+      Variable = v,
+      Mean = round(mean(x, na.rm = TRUE), 2),
+      SD = round(sd(x, na.rm = TRUE), 2),
+      Median = round(median(x, na.rm = TRUE), 2),
+      Min = round(min(x, na.rm = TRUE), 2),
+      Max = round(max(x, na.rm = TRUE), 2)
+    )
+  }))
+}
+#Continuous Data variables
+continuous_vars <- c(
+  "Age",
+  "Sleep.Duration",
+  "Quality.of.Sleep",
+  "Physical.Activity.Level",
+  "Stress.Level",
+  "Heart.Rate",
+  "Daily.Steps"
+)
+continuous_table <- continuous_summary(data, continuous_vars)
+
+#Function for categorical data
+categorical_summary <- function(data, vars) {
+  do.call(rbind, lapply(vars, function(v) {
+    counts <- table(data[[v]])
+    percents <- prop.table(counts) * 100
+    data.frame(
+      Variable = v,
+      Category = names(counts),
+      Count = as.vector(counts),
+      `n (%)` = sprintf("%d (%.1f%%)", counts, percents)
+    )
+  }))
+}
+
+#Categorical variables
+categorical_vars <- c(
+  "Gender",
+  "BP",
+  "Occupation",
+  "Sleep.Disorder"
+)
+categorical_table <- categorical_summary(data, categorical_vars)
+
+```
+
+###Descriptive Statistics Figures
+```{r}
+#Bar plot to see sleep quality distribution
+ggplot(data, aes(x = factor(Quality.of.Sleep, levels = 1:10))) +
+  geom_bar(fill = "#FAB4D8", color = "black") +
+  scale_x_discrete(drop = FALSE) +
+  scale_y_continuous(breaks = seq(0, max(table(data$Quality.of.Sleep)) + 10, by = 10)) +
+  labs(title = "Distribution of Sleep Quality", x = "Sleep Quality (1-10)", y = "Count") +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 18))
+
+#Histogram for Sleep Duration
+max_count_duration <- max(ggplot_build(ggplot(data, aes(x = Sleep.Duration)) + geom_histogram(binwidth = 1))$data[[1]]$count)
+ggplot(data, aes(x = Sleep.Duration)) +
+  geom_histogram(binwidth = 1, color = "black", fill = "#DDA0DD") +
+  scale_x_continuous(breaks = seq(floor(min(data$Sleep.Duration)), ceiling(max(data$Sleep.Duration)),by = 0.5)) +
+  scale_y_continuous(breaks = seq(0, max_count_duration + 20, by = 20)) +
+  labs(title = "Distribution of Sleep Duration", x = "Sleep Duration (Hours)", y = "Count") +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 18))
+
+#Bar chart for Occupations
+ggplot(data, aes(x = reorder(Occupation, -table(Occupation)[Occupation]))) +
+  geom_bar(fill = "#E675C9", color = "black") +
+  coord_flip() +
+  scale_y_continuous(breaks = seq(0, max(table(data$Occupation)) + 5, by = 5)) +
+  labs(title = "Distribution of Occupation", x = "", y = "Count") +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 18),axis.text.y = element_text(face = "bold"))
+
+#Bar chart for Sleep Disorder
+ggplot(data, aes(x = reorder(Sleep.Disorder, -table(Sleep.Disorder)[Sleep.Disorder]))) +
+  geom_bar(width = 0.8, fill = "#FF68C8", color = "black") +
+  coord_flip() +
+  scale_y_continuous(breaks = seq(0, max(table(data$Sleep.Disorder)) + 20, by = 20)) +
+  labs(title = "Distribution of Sleep Disorder", x = "", y = "Count") +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 18),axis.text.y = element_text(face = "bold"))
+
+```
+
+
+
+###Decision tree modeling
+```{r}
+#The dplyr package allows removing columns from the file.
+df <- data %>% select(-BMI.Category, -Blood.Pressure, -Person.ID,
+                      -Systolic, -Diastolic, -Quality.of.Sleep,
+                      -Daily.Steps)
+
+#All character columns are converted to factor columns
+#Required input for confusion matrix generation
+df[sapply(df, is.character)] <- lapply(df[sapply(df, is.character)], 
+                                       as.factor)
+```
+
+```{r}
+#Random seperation of the dataset into training and testing
+train_index <- createDataPartition(df$Sleep.Disorder, p=0.8, list=FALSE)
+train_data <- df[train_index, ]
+test_data <- df[-train_index,]
+
+#Creation of the machine learning model
+tree_model <- rpart(Sleep.Disorder ~ .,
+                    data = train_data,
+                    method = "class",
+                    control = rpart.control(maxdepth = 3, cp=0.001))
+
+#Plotting the model via rpart.plot module
+rpart.plot(tree_model, box.palette = "Purples", nn = TRUE)
+
+#Choose levels with hyperparameter "maxdepth", minimum number of examples in
+# a node to perform a split - "minsplit", minimum number of examples in a 
+# terminal node - "minbucket", split must increase performance - "cp"
+```
+```{r}
+#Creation of confusion matrix
+predictions <- predict(tree_model, test_data, type = "class")
+#Typecasting predictions into factor and use of test_data's variable of interest
+#as it is the same length, do not use the dataframes variable
+confusionMatrix(as.factor(predictions), test_data$Sleep.Disorder)
+
+#str(predictions)
+#str(df$Sleep.Disorder)
+
+#length(predictions)
+#length(test_data$Sleep.Disorder)
+```
+```{r}
+#Random seperation of the dataset into training and testing
+train_index <- createDataPartition(df$Sleep.Quality, p=0.8, list=FALSE)
+train_data <- df[train_index, ]
+test_data <- df[-train_index,]
+
+#Creation of the machine learning model
+tree_model <- rpart(Sleep.Quality.Group ~ .,
+                    data = train_data,
+                    method = "class",
+                    control = rpart.control(minsplit = 10, cp = 0.01))
+
+#Plotting the model via rpart.plot module
+rpart.plot(tree_model, box.palette = "Purples", nn = TRUE, main = "Sleep Quality Decision Tree")
+```
+
+```{r}
+#Creation of confusion matrix
+predictions <- predict(tree_model, test_data, type = "class")
+#Typecasting predictions into factor and use of test_data's variable of interest
+#as it is the same length, do not use the dataframes variable
+confusionMatrix(as.factor(predictions), test_data$Sleep.Quality)
+```
+```{r}
+#Attempts on K-means clustering with unlabeled data - Unsupervised Learning
+#Trying to determine what sort of groups are in the data, what sort of relationships
+#To aid in classification, helps in genomics and biological data, 
+#Used to group observations, uses Euclidean distance between points
+
+#install.packages("factoextra")
+library(factoextra)
+
+#We are testing the data to see if it fits to these labels
+disorder_labels <- df$Sleep.Disorder
+table(disorder_labels)
+
+quality_labels <- df$Sleep.Quality
+table(quality_labels)
+```
+
+```{r}
+#The data without the labels is instantiated
+unlabeled_df <- df %>% select(-Sleep.Disorder, -Sleep.Quality.Group)
+
+#All features need to be numeric for scaling
+#Turn Female -> 1, Male -> 2
+#Turn Elevated -> 1, High -> 2, Normal -> 3
+unlabeled_df[] <- lapply(unlabeled_df, as.numeric)
+unlabeled_df_1 <- unlabeled_df
+#glimpse(unlabeled_df)
+
+#Scaling the data, distance matrix needs to be unweighted, balances the dataset
+#Makes all features important, no matter how big the scale is
+unlabeled_df_scale <- scale(unlabeled_df)
+
+#Apply the scale to the data set, method is default Euclidean
+unlabeled_df <- dist(unlabeled_df_scale)
+
+#Elbow method, within sum squares -> wss
+#Gives us a plot that tells us the optimal number of clusters that we should begin with
+fviz_nbclust(unlabeled_df_scale, kmeans, method = "wss") + 
+  labs(subtitle = "Elbow method")
+```
+
+```{r}
+
+#K-means
+km_out <- kmeans(unlabeled_df_scale, centers = 7, nstart = 100)
+#km_out
+
+#Visualizing the clusters
+km_clusters <- km_out$cluster
+
+#Adding unique names of the each label to the scaling 
+#rownames(unlabeled_df_scale) <- paste(df$Sleep.Disorder, 1:dim(df)[1], sep = "_")
+#rownames(unlabeled_df_scale) <- paste(df$Sleep.Disorder, 1:dim(df)[1], sep = "_")
+#unlabeled_df_scale
+
+meow <- c("#C994C7", "#F768A1", "#DD3497", "#AE017E", "#7A0177", "#9E9AC8", "#807DBA")
+
+fviz_cluster(list(data=unlabeled_df_scale, cluster=km_clusters), ggtheme = theme_bw(), palette = meow, main = "k-means clustering for features: Sleep Disorder and Quality")
+```
+
+```{r}
+table(km_clusters, df$Sleep.Disorder)
+prop.table(table(km_out$cluster, data$Sleep.Disorder), 1)
+```
+```{r}
+table(km_clusters, df$Sleep.Quality)
+prop.table(table(km_out$cluster, data$Sleep.Quality), 1)
+```
+
+
+```{r}
+aggregate(unlabeled_df_1, by = list(Cluster = km_out$cluster), mean)
+#glimpse(unlabeled_df_1)
+```
+
+```{r}
+colMeans(unlabeled_df_1)
+```
+
+```{r}
+#install.packages("gridExtra")
+library("gridExtra")
+```
+
+```{r}
+first <- ggplot(data = df, aes(Heart.Rate, Physical.Activity.Level, color = Sleep.Disorder)) +
+  geom_point(shape = 16, size = 3) + 
+  theme_bw() +
+  theme(aspect.ratio = 1) + 
+  theme(legend.position="none") +
+  geom_density_2d() +
+  scale_color_manual(values = c("None" = "#C994C7", "Sleep Apnea" = "#AE017E", "Insomnia" = "#7A0177"))
+```
+
+```{r}
+second <- ggplot(data = df, aes(Sleep.Duration, Age, color = Sleep.Disorder)) +
+  geom_point(shape = 16, size=4) + 
+  theme_bw() +
+  theme(aspect.ratio = 1) +
+  theme(legend.position="none") +
+  geom_density_2d() +
+  scale_color_manual(values = c("None" = "#C994C7", "Sleep Apnea" = "#AE017E", "Insomnia" = "#7A0177"))
+```
+
+```{r}
+third <- ggplot(data = df, aes(Sleep.Duration, Age, color = Sleep.Quality.Group)) +
+  geom_point(shape = 16, size=4) + 
+  theme_bw() +
+  theme(aspect.ratio = 1) +
+  theme(legend.position="none") + 
+  geom_density_2d() +
+  scale_color_manual(values = c("Low Quality" = "#C994C7", "Medium Quality" = "#AE017E", "High Quality" = "#7A0177"))
+```
+
+```{r}
+fourth <- ggplot(data = df, aes(Heart.Rate, Physical.Activity.Level, color = Sleep.Quality.Group)) +
+  geom_point(shape = 16, size=4) + 
+  theme_bw() +
+  theme(aspect.ratio = 1) +
+  theme(legend.position="none") + 
+  geom_density_2d() +
+  scale_color_manual(values = c("Low Quality" = "#C994C7", "Medium Quality" = "#AE017E", "High Quality" = "#7A0177")) 
+```
+
+```{r}
+#grid.arrange(first, second, third, fourth, ncol=2)
+```
+
+```{r}
+#install.packages("C:\\Users\\diamo\\AppData\\Local\\Temp\\Rtmps5fRyn\\downloaded_packages\\patchwork_1.3.2.tar.gz", repos = NULL, type = "source")
+library(patchwork)
+```
+
+```{r}
+suppressWarnings(print(first)) + suppressWarnings(print(second)) + suppressWarnings(print(third)) + suppressWarnings(print(fourth)) 
+```
+
+
+
+###Non-Parametric Tests
+```{r}
+#Tests
+#Spearman tests for continuous data. It shows association between sleep quality and variable.
+age <- cor.test(data2$Age, data2$Quality.of.Sleep, method = "spearman", exact = FALSE)
+
+sleep_hours <- cor.test(data2$Sleep.Duration, data2$Quality.of.Sleep, method = "spearman", exact = FALSE)
+
+activity_level <- cor.test(data2$Physical.Activity.Level, data2$Quality.of.Sleep, method = "spearman", exact = FALSE)
+
+stress_level <- cor.test(data2$Stress.Level, data2$Quality.of.Sleep, method = "spearman", exact = FALSE)
+
+heart_rate <- cor.test(data2$Heart.Rate, data2$Quality.of.Sleep, method = "spearman", exact = FALSE)
+
+daily_steps <- cor.test(data2$Daily.Steps, data2$Quality.of.Sleep, method = "spearman", exact = FALSE)
+
+#Mann-Whitney tests for binary categorical data. It shows how sleep quality differs between female and male
+gender <- wilcox.test(Quality.of.Sleep ~ Gender, data = data2)
+
+
+#Kruskal-Wallis tests for ordinal data. It also shows how sleep quality differs between each subgroup of these variables.
+
+bp_test <- kruskal.test(Quality.of.Sleep ~ BP, data = data2)
+
+occupation_group <- kruskal.test(Quality.of.Sleep ~ OccupationGroup, data = data2)
+
+sleep_disorder <- kruskal.test(Quality.of.Sleep ~Sleep.Disorder, data = data2)
+
+occupation <- kruskal.test(Quality.of.Sleep ~Occupation, data = data2)
+
+```
+
+##Obtain Effect sizes for Mann-W and KW
+```{r}
+#Mann-Whitney effect size calculation
+rank_biserial(Quality.of.Sleep ~ Gender, data = data2)
+gender_es <- rank_biserial(Quality.of.Sleep ~ Gender, data = data2)
+
+
+#Kruskal-Wallis effect size calculation
+kruskal_effsize(data2, Quality.of.Sleep ~ BP)
+bp_es <- kruskal_effsize(data2, Quality.of.Sleep ~ BP)
+occupation_es <- kruskal_effsize(data2, Quality.of.Sleep ~ Occupation)
+sleepdisorder_es <- kruskal_effsize(data2, Quality.of.Sleep ~ Sleep.Disorder)
+
+
+#Extract effect size Mann-W
+gender_effect <- gender_es$r_rank_biserial
+
+#Extract effect size KW
+bp_effect <- bp_es$effsize
+occupation_effect <- occupation_es$effsize
+sleepdisorder_effect <- sleepdisorder_es$effsize
+
+#Build table with all effect sizes from the 3 tests
+results <- data.frame(
+  Variable = c(
+    "Age",
+    "Sleep Duration (Hours)",
+    "Physical Activity (Minutes/Day)",
+    "Stress Level",
+    "Heart Rate",
+    "Daily Steps",
+    "Gender",
+    "Blood Pressure",
+    "Sleep Disorder",
+    "Occupation"
+  ),
+  Test = c(
+    rep("Spearman", 6),
+    rep("Mann-Whitney U", 1),
+    rep("Kruskal-Wallis", 3)
+  ),
+  Effect_Size = c(
+    #Spearman rho
+    age$estimate,
+    sleep_hours$estimate,
+    activity_level$estimate,
+    stress_level$estimate,
+    heart_rate$estimate,
+    daily_steps$estimate,
+    #Mann-Whitney rank biserial
+    gender_effect,
+    #Kruskal-Wallis epsilon squared
+    bp_effect,
+    sleepdisorder_effect,
+    occupation_effect
+  ),
+  Effect_Type = c(
+    rep("Spearman rho", 6),
+    rep("Rank-biserial correlation", 1),
+    rep("Epsilon squared", 3)
+  ),
+  P_value = c(
+    #Spearman p-values
+    age$p.value,
+    sleep_hours$p.value,
+    activity_level$p.value,
+    stress_level$p.value,
+    heart_rate$p.value,
+    daily_steps$p.value,
+    #Mann-Whitney p-values
+    gender$p.value,
+    #Kruskal-Wallis p-values
+    bp_test$p.value,
+    sleep_disorder$p.value,
+    occupation$p.value
+  )
+)
+
+#Formatting table
+results <- results %>%
+  mutate(Effect_Size = round(as.numeric(Effect_Size), 3),
+         P_value = signif(P_value, 3),
+         neg_log10_p = round(-log10(P_value), 2))
+
+#Make results significant if p-value is lower than 0.01
+results$Significant <- ifelse(results$P_value < 0.01, "Yes", "No")
+
+#Save table
+write.csv(results, "all_results.csv", row.names = FALSE)
+```
+
+##Plot heatmap for -log10
+```{r}
+#Plot heatmap
+ggplot(results,aes(x = Test, y = reorder(Variable, neg_log10_p), fill = neg_log10_p)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = sprintf("%.2f", neg_log10_p)), size = 3.5) +
+  scale_fill_gradient(low = "white", high = "#F9629F", name = expression(-log[10](p))) +
+  labs(title = "Statistical Significance (using -log10(p))", x = "", y = "") +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 18),panel.grid = element_blank(), axis.text.y = element_text(face = "bold"), axis.text.x = element_text(face = "bold"))
+
+```
+
+##Plot effect sizes
+```{r}
+#Function for plotting Spearman
+effect_plot <- function(data, test_name, title, y_label) {
+  plot_data <- data %>%
+    filter(Test == test_name) %>%
+    mutate(Variable = reorder(Variable, Effect_Size),
+           Label_Position = ifelse(abs(Effect_Size) < 0.15,
+                                   Effect_Size + ifelse(Effect_Size > 0, 0.05, -0.05),
+                                   Effect_Size - ifelse(Effect_Size > 0, 0.05, -0.05)))
+  ggplot(
+    plot_data,
+    aes(x = Variable, y = Effect_Size, fill = Effect_Size > 0)) +
+    geom_col(width = 0.7) +
+    geom_text(aes(y = Label_Position, label = round(Effect_Size, 2)), color = ifelse(abs(plot_data$Effect_Size) < 0.15, "black", "white"),
+              fontface = "bold", size = 4) +
+    coord_flip() +
+    geom_hline(yintercept = 0, linewidth = 0.8) +
+    scale_y_continuous(breaks = seq(-1, 1, 0.2)) +
+    scale_fill_manual(values = c("#720e9e", "#FF69B4"), guide = "none") +
+    labs(title = title,x = "", y = y_label) +
+    theme_minimal(base_size = 13) +
+    theme(plot.title = element_text(face = "bold", size = 18), axis.text.y = element_text(face = "bold"))
+}
+
+effect_plot(results,
+  "Spearman",
+  "Spearman Correlation with Sleep Quality",
+  expression(rho)
+)
+
+#KW
+kruskal_effect_plot <- function(data, title) {
+  plot_data <- data %>%
+    filter(Test == "Kruskal-Wallis") %>%
+    mutate(Variable = reorder(Variable, Effect_Size), Label_Position = ifelse(Effect_Size < 0.05, Effect_Size + 0.03, Effect_Size - 0.03))
+  ggplot(plot_data, aes(x = Variable, y = Effect_Size, fill = Effect_Size)) +
+    geom_col(width = 0.7) +
+    geom_text(aes(y = Label_Position, label = round(Effect_Size, 2)), color = ifelse(abs(plot_data$Effect_Size) < 0.05, "black", "white"), 
+              fontface= "bold", size = 4) +
+    coord_flip() +
+    scale_fill_gradient(low = "#E8D5F5", high = "#720e9e", guide = "none") +
+    labs(title = title, x = "", y = expression(epsilon^2)) +
+    theme_minimal(base_size = 13) +
+    theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 18), axis.text.y = element_text(face = "bold"))
+}
+kruskal_effect_plot(results, "Kruskal–Wallis Effect Size on Sleep Quality")
+
+##Mann-W plotting:
+#Extract Mann-Whitney results for Gender
+mw_result <- results %>% filter(Variable == "Gender")
+p_value <- mw_result$P_value
+effect_size <- mw_result$Effect_Size
+
+ggplot(data2, aes(x = Gender, y = Quality.of.Sleep, fill = Gender)) +
+  geom_boxplot(alpha = 0.7, outlier.shape = 16) +
+  annotate("text", x = 1.5, y = 2.5, label = paste0("Mann–Whitney p = ",signif(p_value, 3),
+                                                                                  "\nEffect size r = ", round(effect_size, 2)),
+           size = 5) +
+  scale_y_continuous(limits = c(1, 10), breaks = seq(1, 10, by = 1)) +
+  scale_fill_manual(values = c("Female" = "#F4A6C1", "Male" = "#9B8AC4")) +
+  labs(title = "Sleep Quality Differences Between Female and Male",x = "Gender",y = "Sleep Quality (1–10)") +
+  theme_minimal() +
+  theme(legend.position = "none",plot.title = element_text(face = "bold", hjust = 0.5, size = 13))
+
+```
+
+
+
+##Linear Regression
+```{r}
+##Create the modelling dataframe
+#Remove identifiers and variables that should not enter the model
+df_linear <- data %>%
+  select(
+    -Person.ID,
+    -Blood.Pressure,
+    -Systolic,
+    -Diastolic)
+
+#Convert character variables into factors
+df_linear[sapply(df_linear, is.character)] <-
+  lapply(
+    df_linear[sapply(df_linear, is.character)],
+    as.factor)
+summary(df_linear)
+# Check for remaining missing values
+colSums(is.na(df_linear))
+```
+
+# Exploratory analysis
+## Sleep duration and sleep quality
+```{r}
+ggplot(
+  df_linear,
+  aes(
+    x = Sleep.Duration,
+    y = Quality.of.Sleep)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(
+    method = "lm",
+    se = TRUE) +
+  labs(
+    title = "Sleep Duration and Sleep Quality",
+    x = "Sleep Duration (hours)",
+    y = "Quality of Sleep") +
+  theme_minimal()
+```
+
+## Stress level and sleep quality
+```{r}
+ggplot(
+  df_linear,
+  aes(
+    x = Stress.Level,
+    y = Quality.of.Sleep
+  )
+) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(
+    method = "lm",
+    se = TRUE
+  ) +
+  labs(
+    title = "Stress Level and Sleep Quality",
+    x = "Stress Level",
+    y = "Quality of Sleep") +
+  theme_minimal()
+```
+
+# Correlation analysis
+```{r, fig.width=8, fig.height=6.5, dpi=300, out.width="90%"}
+# Pearson correlation is calculated only for numeric variables
+# Keep only numeric variables
+numeric_df <- df_linear %>%
+  select(where(is.numeric)) %>%
+  rename(
+    "Sleep Duration" = Sleep.Duration,
+    "Sleep Quality" = Quality.of.Sleep,
+    "Physical Activity" = Physical.Activity.Level,
+    "Daily Steps" = Daily.Steps,
+    "Stress Level" = Stress.Level,
+    "Heart Rate" = Heart.Rate
+  )
+
+corr_matrix <- round(
+  cor(
+    numeric_df,
+    use = "complete.obs"
+  ),
+  2
+)
+
+ggcorrplot(
+  corr_matrix,
+  hc.order = TRUE,
+  type = "full",
+  lab = TRUE,
+  lab_size = 2.4,
+  colors = c(
+    "#7A0177",
+    "#9E9AC8",
+    "#DD3497"
+  ),
+  outline.color = "white",
+  title = "Pearson Correlation Heatmap",
+  ggtheme = theme_minimal(base_size = 11)
+) +
+  theme(
+    plot.title = element_text(
+      hjust = 0.5,
+      size = 15,
+      face = "bold",
+      margin = margin(b = 14)
+    ),
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1,
+      size = 9,
+      face = "plain",
+      color = "black"
+    ),
+    axis.text.y = element_text(
+      size = 9,
+      face = "plain",
+      color = "black"
+    ),
+    panel.grid = element_blank()
+  )
+```
+
+The correlation plot includes only numeric variables. Variables such as occupation, BMI category, sleep disorder and blood-pressure category are factors and should not be converted into arbitrary numeric codes for Pearson correlation.
+
+# Training and test split
+```{r}
+set.seed(123)
+
+train_index <- createDataPartition(
+  df_linear$BP,
+  p = 0.80,
+  list = FALSE
+)
+
+train_df <- df_linear[train_index, ]
+test_df  <- df_linear[-train_index, ]
+
+cat("Training observations:", nrow(train_df), "\n")
+cat("Test observations:", nrow(test_df), "\n")
+```
+
+# Full multiple linear regression model
+```{r}
+# The full model contains all available predictors
+full_model <- lm(
+  Quality.of.Sleep ~ .,
+  data = train_df)
+summary(full_model)
+```
+
+# Backward model selection using BIC
+```{r}
+# BIC applies a stronger complexity penalty than AIC
+# BIC uses k = log(n), where n is the number of training observations
+
+backward_BIC <- step(
+  full_model,
+  direction = "backward",
+  k = log(nrow(train_df)),
+  trace = FALSE
+)
+
+formula(backward_BIC)
+summary(backward_BIC)
+```
+
+# Selected and removed predictors
+```{r}
+full_predictors <- attr(
+  terms(full_model),
+  "term.labels"
+)
+
+selected_predictors <- attr(
+  terms(backward_BIC),
+  "term.labels"
+)
+
+removed_predictors <- setdiff(
+  full_predictors,
+  selected_predictors
+)
+
+cat("Selected predictors:\n")
+print(selected_predictors)
+
+cat("\nRemoved predictors:\n")
+print(removed_predictors)
+```
+
+# Training-model comparison
+```{r}
+model_comparison <- data.frame(
+  Model = c("Full Model", "Backward BIC"),
+  BIC = c(
+    BIC(full_model),
+    BIC(backward_BIC)
+  ),
+  Features = c(
+    length(attr(terms(full_model), "term.labels")),
+    length(attr(terms(backward_BIC), "term.labels"))
+  ),
+  Adj_R2 = c(
+    summary(full_model)$adj.r.squared,
+    summary(backward_BIC)$adj.r.squared
+  )
+)
+
+ggplot(
+  model_comparison,
+  aes(
+    x = Model,
+    y = BIC,
+    fill = Model
+  )
+) +
+  geom_col(width = 0.45) +
+
+  geom_text(
+    aes(
+      label = paste0(
+        Features, " features\n",
+        "Adj. R² = ", round(Adj_R2, 3)
+      )
+    ),
+    vjust = -0.35,
+    size = 3.5,
+    fontface = "bold"
+  ) +
+
+  scale_fill_manual(
+    values = c("#7A0177", "#DD3497")
+  ) +
+
+  scale_y_continuous(
+    expand = expansion(mult = c(0, 0.18))
+  ) +
+
+  labs(
+    title = "Model Comparison Using BIC",
+    x = NULL,
+    y = "BIC"
+  ) +
+
+  theme_minimal(base_size = 11) +
+
+  theme(
+    legend.position = "none",
+    plot.title = element_text(
+      face = "bold",
+      hjust = 0.5,
+      size = 13
+    ),
+    axis.title = element_text(size = 11),
+    axis.text = element_text(size = 10)
+  )
+```
+
+# Test-set predictions
+```{r}
+pred_full <- predict(
+  full_model,
+  newdata = test_df)
+
+pred_BIC <- predict(
+  backward_BIC,
+  newdata = test_df)
+```
+
+# Test-set evaluation
+
+```{r}
+evaluate_model <- function(actual, predicted) {
+  residuals <- actual - predicted
+  RSS <- sum(residuals^2)
+  MSE <- mean(residuals^2)
+  R2 <- 1 -
+    sum((actual - predicted)^2) /
+    sum((actual - mean(actual))^2)
+  return(
+    c(
+      RSS = RSS,
+      MSE = MSE,
+      R2 = R2))}
+```
+
+```{r}
+full_test_results <- evaluate_model(
+  actual = test_df$Quality.of.Sleep,
+  predicted = pred_full)
+
+BIC_test_results <- evaluate_model(
+  actual = test_df$Quality.of.Sleep,
+  predicted = pred_BIC)
+
+test_comparison <- data.frame(
+  Model = c(
+    "Full model",
+    "Backward BIC model"),
+
+  RSS = c(
+    full_test_results["RSS"],
+    BIC_test_results["RSS"]),
+
+  MSE = c(
+    full_test_results["MSE"],
+    BIC_test_results["MSE"]),
+
+  Test_R2 = c(
+    full_test_results["R2"],
+    BIC_test_results["R2"]))
+
+test_comparison %>%
+  mutate(
+    across(
+      where(is.numeric),
+      ~ round(.x, 4))) %>%
+  kable(
+    caption = "Test Performance of the Full and BIC-Selected Models") %>%
+  kable_styling(
+    bootstrap_options = c(
+      "striped",
+      "hover",
+      "condensed"),
+    full_width = FALSE)
+```
+
+# Actual and predicted values
+```{r}
+prediction_results <- data.frame(
+  Actual = test_df$Quality.of.Sleep,
+  Predicted = as.numeric(pred_BIC),
+  Residual = test_df$Quality.of.Sleep -
+    as.numeric(pred_BIC))
+
+ggplot(
+  prediction_results,
+  aes(
+    x = Actual,
+    y = Predicted
+  )) +
+  geom_point(alpha = 0.7) +
+  geom_abline(
+    intercept = 0,
+    slope = 1,
+    linetype = "dashed"
+  ) +
+  labs(
+    title = "Actual and Predicted Sleep Quality",
+    subtitle = "Backward BIC Model",
+    x = "Actual Quality of Sleep",
+    y = "Predicted Quality of Sleep"
+  ) +
+  theme_minimal()
+```
+
+# Multicollinearity
+```{r}
+# Generalized VIF is returned because the model contains factor variables
+vif_results <- car::vif(backward_BIC)
+
+if (is.matrix(vif_results)) {
+
+  # Keep only the adjusted GVIF column
+  vif_table <- data.frame(
+    Predictor = rownames(vif_results),
+    Adjusted_GVIF = vif_results[, "GVIF^(1/(2*Df))"],
+    row.names = NULL
+  )
+
+  vif_table %>%
+    mutate(
+      Adjusted_GVIF = round(Adjusted_GVIF, 3)
+    ) %>%
+    kable(
+      col.names = c(
+        "Predictor",
+        "Adjusted GVIF"
+      ),
+      caption = "Adjusted Generalized Variance Inflation Factors"
+    ) %>%
+    kable_styling(
+      bootstrap_options = c(
+        "striped",
+        "hover",
+        "condensed"
+      ),
+      full_width = FALSE)
+} else {
+
+  # This section is used if the model contains only one-degree-of-freedom predictors
+  vif_table <- data.frame(
+    Predictor = names(vif_results),
+    VIF = as.numeric(vif_results))
+
+  vif_table %>%
+    mutate(
+      VIF = round(VIF, 3)) %>%
+    kable(
+      caption = "Variance Inflation Factors") %>%
+    kable_styling(
+      bootstrap_options = c(
+        "striped",
+        "hover",
+        "condensed"),
+      full_width = FALSE)}
+```
+
+Because the model contains categorical predictors with multiple levels, the adjusted measure \(GVIF^{1/(2\times Df)}\) was interpreted. All adjusted GVIF values were below 5, indicating that multicollinearity was not a major concern in the final model.
+
+# Model Assumption
+```{r, fig.width=9, fig.height=9}
+par(mfrow = c(2, 2))
+plot(backward_BIC)
+```

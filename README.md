@@ -1,2 +1,2 @@
 # Sleep-Quality-study
-This study analyses how lifestyle and health-related factors influence sleep quality using descriptive statistics, machine learning techniques, non-parametric statistical tests, and linear regression.
+This study analyses how lifestyle and health-related factors influence sleep quality using descriptive statistics, machine learning techniques, non-parametric statistical tests, and linear regression. Further information on the methods used and the results acquired can be found in the document titled "The effect of different parameters on sleep quality."
